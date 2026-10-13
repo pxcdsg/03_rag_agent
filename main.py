@@ -5,16 +5,15 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import OpenAI
-
 #上面是导包
 
 BASE_DIR = Path(__file__).parent#定义本文件的源文件夹路径
 DOCUMENTS_DIR = BASE_DIR / "documents"#定义源文件夹下的documents文件夹
 CHUNK_SIZE = 120#不知道这个是定义什么，读后面发现这是预先定义一个文本块的大小规格
 CHUNK_OVERLAP = 20#不知道这个是定义什么，读后面发现这是定义相邻文本文件的重合规格，是为了避免两个相邻文本文件内容出现割裂。
-TOP_K = 2
+TOP_K = 2#不知道这个是定义了啥，
 
-load_dotenv(BASE_DIR / ".env", override=True)
+load_dotenv(BASE_DIR / ".env", override=True)#读取.env文件的内容。
 
 
 #定义一个读取文档的函数，我不知道这些参数是什么意思(path: Path) -> str:
@@ -22,30 +21,53 @@ def load_document(path: Path) -> str:
     """读取一个 UTF-8 文本文档。"""
     return path.read_text(encoding="utf-8")
 
-#定义一个分割文本文件的函数，定义每个文本文件的长度为chunk_size然后定义相邻文本文件的重合规格，
+#定义一个分割文本的函数，优先按段落切块，超长段落才保留字符重叠，
 def split_text(
     text: str,
     chunk_size: int = CHUNK_SIZE,
     overlap: int = CHUNK_OVERLAP,
 ) -> list[str]:
-    """把长文本切成小块，相邻块之间保留 overlap 个字符。"""
+    """优先按段落切块，超长段落再按 overlap 个字符重叠切分。"""
     if chunk_size <= 0:
         raise ValueError("chunk_size 必须大于 0")
     if overlap < 0 or overlap >= chunk_size:
         raise ValueError("overlap 必须大于等于 0，并且小于 chunk_size")
 
-    normalized_text = " ".join(text.split())#压缩多余空行和换行
+    chunks = []
+    paragraphs = [paragraph.strip() for paragraph in text.split("\n\n")]
+
+    for paragraph in paragraphs:
+        if not paragraph:
+            continue
+
+        normalized_text = " ".join(paragraph.split())#压缩段落内的多余空格和换行
+
+        if len(normalized_text) <= chunk_size:
+            chunks.append(normalized_text)
+            continue
+
+        chunks.extend(split_long_paragraph(normalized_text, chunk_size, overlap))
+
+    return chunks
+
+
+def split_long_paragraph(
+    text: str,
+    chunk_size: int,
+    overlap: int,
+) -> list[str]:
+    """把超过 chunk_size 的单个段落按字符重叠切分。"""
     chunks = []
     start = 0
 
-    while start < len(normalized_text):
-        end = min(start + chunk_size, len(normalized_text))
-        chunk = normalized_text[start:end].strip()
+    while start < len(text):
+        end = min(start + chunk_size, len(text))
+        chunk = text[start:end].strip()
 
         if chunk:
             chunks.append(chunk)
 
-        if end == len(normalized_text):
+        if end == len(text):
             break
 
         start = end - overlap
@@ -116,7 +138,7 @@ def retrieve(question: str, chunks: list[dict], top_k: int = 2) -> list[dict]:
     results.sort(key=lambda item: item["score"], reverse=True)
     return results[:top_k]
 
-
+#这个函数是实现与要调用的大模型进行链接，以便能用他们的服务。
 def create_client():
     """根据 .env 配置创建 DeepSeek 或 Ollama 客户端。"""
     provider = os.getenv("LLM_PROVIDER", "deepseek").strip().lower()
@@ -149,6 +171,7 @@ def create_client():
     )
 
 
+#这一部分是将检索得到的结果进行编号为后续投喂到大模型中去做准备
 def build_context(results: list[dict]) -> str:
     """把检索结果整理成带来源编号的参考资料。"""
     context_parts = []
@@ -159,7 +182,7 @@ def build_context(results: list[dict]) -> str:
 
     return "\n\n".join(context_parts)
 
-
+#这是给大模型提供系统提示词，要求大模型在回答问题时遵循system_prompt所示的规则
 def build_messages(question: str, context: str) -> list[dict]:
     """构造要求模型基于参考资料回答的消息。"""
     system_prompt = (
@@ -179,7 +202,7 @@ def build_messages(question: str, context: str) -> list[dict]:
         {"role": "user", "content": user_prompt},
     ]
 
-
+#这个函数通过输入大模型链接信息，以及前面函数获取的文本消息，基于大模型自身的能力去回答问题，并且返回大模型的回答。
 def ask_model(client, model: str, messages: list[dict]) -> str:
     """调用模型并返回生成的回答。"""
     response = client.chat.completions.create(
