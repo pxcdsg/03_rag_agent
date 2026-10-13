@@ -14,6 +14,8 @@ CHUNK_OVERLAP = 20#不知道这个是定义什么，读后面发现这是定义�
 TOP_K = 2#不知道这个是定义了啥，
 
 load_dotenv(BASE_DIR / ".env", override=True)#读取.env文件的内容。
+RETRIEVAL_MODE = os.getenv("RETRIEVAL_MODE", "embedding").strip().lower()
+EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "embeddinggemma").strip()
 
 
 #定义一个读取文档的函数，我不知道这些参数是什么意思(path: Path) -> str:
@@ -138,6 +140,69 @@ def retrieve(question: str, chunks: list[dict], top_k: int = 2) -> list[dict]:
     results.sort(key=lambda item: item["score"], reverse=True)
     return results[:top_k]
 
+
+def create_embedding_client():
+    """创建连接本地 Ollama 的 Embedding 客户端。"""
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    return OpenAI(
+        api_key="ollama",
+        base_url=base_url,
+    )
+
+
+def embed_texts(client, model: str, texts: list[str]) -> list[list[float]]:
+    """调用 Embedding 接口，把一组文本转换成向量。"""
+    response = client.embeddings.create(
+        model=model,
+        input=texts,
+    )
+    ordered_data = sorted(response.data, key=lambda item: item.index)
+    return [item.embedding for item in ordered_data]
+
+
+def vector_cosine_similarity(left: list[float], right: list[float]) -> float:
+    """计算两个 Embedding 向量的余弦相似度。"""
+    if len(left) != len(right):
+        raise ValueError("两个向量的维度必须相同")
+
+    dot_product = sum(
+        left_value * right_value
+        for left_value, right_value in zip(left, right)
+    )
+    left_length = math.sqrt(sum(value * value for value in left))
+    right_length = math.sqrt(sum(value * value for value in right))
+
+    if left_length == 0 or right_length == 0:
+        return 0.0
+
+    return dot_product / (left_length * right_length)
+
+
+def retrieve_with_embeddings(
+    question: str,
+    chunks: list[dict],
+    client,
+    model: str,
+    top_k: int = 2,
+) -> list[dict]:
+    """使用 Embedding 语义向量检索最相关的文本块。"""
+    if not chunks:
+        return []
+
+    texts = [chunk["text"] for chunk in chunks]
+    vectors = embed_texts(client, model, texts + [question])
+    chunk_vectors = vectors[:-1]
+    question_vector = vectors[-1]
+    results = []
+
+    for chunk, chunk_vector in zip(chunks, chunk_vectors):
+        score = vector_cosine_similarity(question_vector, chunk_vector)
+        results.append({**chunk, "score": score})
+
+    results.sort(key=lambda item: item["score"], reverse=True)
+    return results[:top_k]
+
+
 #这个函数是实现与要调用的大模型进行链接，以便能用他们的服务。
 def create_client():
     """根据 .env 配置创建 DeepSeek 或 Ollama 客户端。"""
@@ -233,11 +298,33 @@ def main():
         print("问题不能为空。")
         return
 
-    results = retrieve(question, chunks, top_k=TOP_K)
+    if RETRIEVAL_MODE == "embedding":
+        try:
+            embedding_client = create_embedding_client()
+            results = retrieve_with_embeddings(
+                question,
+                chunks,
+                embedding_client,
+                EMBEDDING_MODEL,
+                top_k=TOP_K,
+            )
+        except Exception as error:
+            print(f"Embedding 检索失败：{error}")
+            return
+    elif RETRIEVAL_MODE == "lexical":
+        results = retrieve(question, chunks, top_k=TOP_K)
+    else:
+        print(
+            f"不支持的 RETRIEVAL_MODE：{RETRIEVAL_MODE}，"
+            "请填写 embedding 或 lexical。"
+        )
+        return
+
     context = build_context(results)
     messages = build_messages(question, context)
 
-    print(f"\n检索到的 {len(results)} 个文本块：\n")
+    print(f"\n检索方式：{RETRIEVAL_MODE}")
+    print(f"检索到的 {len(results)} 个文本块：\n")
     for chunk in results:
         print(
             f"[{chunk['source']} #{chunk['chunk_index']}] "
