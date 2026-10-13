@@ -55,6 +55,18 @@ lexical：使用原来的字符词频检索
 python main.py
 ```
 
+## 检索评测
+
+运行独立的检索评测集，比较字面检索和 Embedding 检索：
+
+```powershell
+python evaluate_retrieval.py
+```
+
+评测语料位于 `evaluations/documents/`，问题位于
+`evaluations/retrieval_cases.json`。脚本会输出两种方式的 Top-1
+和 Top-3 命中率。
+
 ## 后续阶段
 
 1. 缓存文档向量，避免每次提问重复计算

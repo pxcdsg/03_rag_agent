@@ -77,11 +77,11 @@ def split_long_paragraph(
     return chunks
 
 #load_chunks() -> list[dict]:这个->是什么含义呀？然后这一部分是为每一个chunk保存了一个登记信息包括来源路径，自己的编号还有具体的内容
-def load_chunks() -> list[dict]:
+def load_chunks(documents_dir: Path = DOCUMENTS_DIR) -> list[dict]:
     """读取 documents 目录下的文档，并为每块保存来源信息。"""
     all_chunks = []
 
-    for path in sorted(DOCUMENTS_DIR.glob("*")):
+    for path in sorted(documents_dir.glob("*")):
         if path.suffix.lower() not in {".md", ".txt"}:
             continue
 

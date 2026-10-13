@@ -1,0 +1,22 @@
+[
+  {
+    "query": "小汽车",
+    "expected_keyword": "轿车"
+  },
+  {
+    "query": "机动车",
+    "expected_keyword": "轿车"
+  },
+  {
+    "query": "水果里有什么营养",
+    "expected_keyword": "香蕉"
+  },
+  {
+    "query": "对地观测",
+    "expected_keyword": "遥感技术"
+  },
+  {
+    "query": "知识增强问答",
+    "expected_keyword": "检索增强生成"
+  }
+]
