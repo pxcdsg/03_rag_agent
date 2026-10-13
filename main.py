@@ -1,3 +1,5 @@
+import hashlib
+import json
 import math
 import os
 from collections import Counter
@@ -16,6 +18,9 @@ TOP_K = 2#不知道这个是定义了啥，
 load_dotenv(BASE_DIR / ".env", override=True)#读取.env文件的内容。
 RETRIEVAL_MODE = os.getenv("RETRIEVAL_MODE", "embedding").strip().lower()
 EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "embeddinggemma").strip()
+CACHE_DIR = BASE_DIR / ".cache"
+EMBEDDING_CACHE_FILE = CACHE_DIR / "embedding_vectors.json"
+EMBEDDING_CACHE_VERSION = 1
 
 
 #定义一个读取文档的函数，我不知道这些参数是什么意思(path: Path) -> str:
@@ -160,6 +165,91 @@ def embed_texts(client, model: str, texts: list[str]) -> list[list[float]]:
     return [item.embedding for item in ordered_data]
 
 
+def hash_text(text: str) -> str:
+    """生成文本的稳定哈希值，作为缓存键。"""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def load_embedding_cache(model: str) -> dict[str, list[float]]:
+    """读取与当前模型匹配的 Embedding 缓存。"""
+    if not EMBEDDING_CACHE_FILE.exists():
+        return {}
+
+    try:
+        data = json.loads(EMBEDDING_CACHE_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+    if data.get("version") != EMBEDDING_CACHE_VERSION:
+        return {}
+    if data.get("model") != model:
+        return {}
+
+    vectors = data.get("vectors")
+    if not isinstance(vectors, dict):
+        return {}
+
+    return vectors
+
+
+def save_embedding_cache(
+    model: str,
+    vectors: dict[str, list[float]],
+) -> None:
+    """把文本向量保存到本地缓存文件。"""
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    data = {
+        "version": EMBEDDING_CACHE_VERSION,
+        "model": model,
+        "vectors": vectors,
+    }
+    EMBEDDING_CACHE_FILE.write_text(
+        json.dumps(data, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def get_chunk_vectors(
+    chunks: list[dict],
+    client,
+    model: str,
+) -> list[list[float]]:
+    """优先复用缓存，只计算缺失的文本块向量。"""
+    cache = load_embedding_cache(model)
+    vectors = []
+    missing_texts = {}
+
+    for chunk in chunks:
+        cache_key = hash_text(chunk["text"])
+        vector = cache.get(cache_key)
+
+        if vector is None:
+            missing_texts[cache_key] = chunk["text"]
+
+        vectors.append(vector)
+
+    if missing_texts:
+        missing_keys = list(missing_texts.keys())
+        missing_vectors = embed_texts(
+            client,
+            model,
+            list(missing_texts.values()),
+        )
+
+        for cache_key, vector in zip(missing_keys, missing_vectors):
+            cache[cache_key] = vector
+
+        save_embedding_cache(model, cache)
+
+    for index, chunk in enumerate(chunks):
+        if vectors[index] is None:
+            vectors[index] = cache[hash_text(chunk["text"])]
+
+    return vectors
+
+
 def vector_cosine_similarity(left: list[float], right: list[float]) -> float:
     """计算两个 Embedding 向量的余弦相似度。"""
     if len(left) != len(right):
@@ -189,10 +279,8 @@ def retrieve_with_embeddings(
     if not chunks:
         return []
 
-    texts = [chunk["text"] for chunk in chunks]
-    vectors = embed_texts(client, model, texts + [question])
-    chunk_vectors = vectors[:-1]
-    question_vector = vectors[-1]
+    chunk_vectors = get_chunk_vectors(chunks, client, model)
+    question_vector = embed_texts(client, model, [question])[0]
     results = []
 
     for chunk, chunk_vector in zip(chunks, chunk_vectors):

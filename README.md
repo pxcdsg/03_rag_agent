@@ -11,6 +11,7 @@
 - 把问题和文本块转换为字符词频特征
 - 使用余弦相似度找出最相关的文本块
 - 使用 Ollama Embedding 进行语义检索
+- 缓存文档向量，问题向量每次实时计算
 - 把相关文本块和问题一起交给 DeepSeek 或 Ollama
 - 要求模型根据参考资料回答并标注来源
 
@@ -69,6 +70,6 @@ python evaluate_retrieval.py
 
 ## 后续阶段
 
-1. 缓存文档向量，避免每次提问重复计算
-2. 增加多轮对话
-3. 增加 FastAPI 或 Streamlit 界面
+1. 增加多轮对话
+2. 增加 FastAPI 或 Streamlit 界面
+3. 用向量数据库替换本地 JSON 缓存
